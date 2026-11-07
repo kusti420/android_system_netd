@@ -214,10 +214,54 @@ int NetworkController::setDefaultNetwork(unsigned netId) {
     return 0;
 }
 
+void NetworkController::addRejectNonSecureUsers(const UidRanges& uidRanges) {
+    std::lock_guard lock(mRWLock);
+    mRejectNonSecureUsers.add(uidRanges);
+}
+
+void NetworkController::removeRejectNonSecureUsers(const UidRanges& uidRanges) {
+    std::lock_guard lock(mRWLock);
+    mRejectNonSecureUsers.remove(uidRanges);
+}
+
+// Linear on purpose: the ranges may overlap (lockdown's user range and single-uid ranges), which
+// UidRanges::hasUid does not handle, and there are only a few dozen of them.
+bool NetworkController::isRejectNonSecureUserLocked(uid_t uid) const {
+    const int64_t u = static_cast<int64_t>(uid);
+    for (const auto& range : mRejectNonSecureUsers.getRanges()) {
+        if (u >= range.start && u <= range.stop) return true;
+    }
+    return false;
+}
+
 uint32_t NetworkController::getNetworkForDnsLocked(unsigned* netId, uid_t uid) const {
     Fwmark fwmark;
     fwmark.protectedFromVpn = true;
     fwmark.permission = PERMISSION_SYSTEM;
+
+    // IchthysOS: a uid that may only reach the network through a VPN never resolves through the
+    // physical network. Stock netd would: with no VPN up (DNS is sent as system traffic, which the
+    // reject-non-secure rule doesn't match, and DnsResolver's blocked-uid check doesn't know that
+    // rule), and with a VPN that has no DNS servers (the b/29498052 fallback below). Either way
+    // the ISP's resolver would carry the uid's lookups and tell every authoritative server where
+    // the phone is, while the uid's own traffic is blocked or tunnelled. Only a VPN that applies
+    // to the uid and has DNS servers answers; otherwise the query goes to the unreachable network
+    // and fails, as the uid's connections do. The explicit bit keeps it from falling through.
+    if (isRejectNonSecureUserLocked(uid)) {
+        unsigned dnsNetId = UNREACHABLE_NET_ID;
+        Network* requested = (*netId != NETID_UNSET) ? getNetworkLocked(*netId) : nullptr;
+        if (requested && requested->isVirtual() && resolv_has_nameservers(*netId) &&
+            checkUserNetworkAccessLocked(uid, *netId) == 0) {
+            dnsNetId = *netId;
+        } else if (VirtualNetwork* vpn = getVirtualNetworkForUserLocked(uid);
+                   vpn && resolv_has_nameservers(vpn->getNetId())) {
+            dnsNetId = vpn->getNetId();
+        }
+        *netId = dnsNetId;
+        fwmark.netId = dnsNetId;
+        fwmark.explicitlySelected = true;
+        return fwmark.intValue;
+    }
 
     Network* appDefaultNetwork = getPhysicalOrUnreachableNetworkForUserLocked(uid);
     unsigned defaultNetId = appDefaultNetwork ? appDefaultNetwork->getNetId() : mDefaultNetId;

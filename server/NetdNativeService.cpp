@@ -369,8 +369,11 @@ binder::Status NetdNativeService::networkRejectNonSecureVpn(
     int err;
     if (add) {
         err = RouteController::addUsersToRejectNonSecureNetworkRule(uidRanges);
+        // IchthysOS: DNS for these uids, see NetworkController::getNetworkForDnsLocked.
+        if (!err) gCtls->netCtrl.addRejectNonSecureUsers(uidRanges);
     } else {
         err = RouteController::removeUsersFromRejectNonSecureNetworkRule(uidRanges);
+        if (!err) gCtls->netCtrl.removeRejectNonSecureUsers(uidRanges);
     }
     return statusFromErrcode(err);
 }

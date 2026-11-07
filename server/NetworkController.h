@@ -20,6 +20,7 @@
 #include <android/multinetwork.h>
 
 #include "NetdConstants.h"
+#include "UidRanges.h"
 #include "Permission.h"
 #include "PhysicalNetwork.h"
 #include "UnreachableNetwork.h"
@@ -151,6 +152,11 @@ public:
     int setNetworkAllowlist(const std::vector<netd::aidl::NativeUidRangeConfig>& rangeConfigs);
     bool isUidAllowed(unsigned netId, uid_t uid) const;
 
+    // IchthysOS: keep the netd-side copy of the reject-non-secure-VPN uids in step with
+    // RouteController's rules, for DNS (getNetworkForDnsLocked).
+    void addRejectNonSecureUsers(const UidRanges& uidRanges);
+    void removeRejectNonSecureUsers(const UidRanges& uidRanges);
+
   private:
     bool isValidNetworkLocked(unsigned netId) const;
     Network* getNetworkLocked(unsigned netId) const;
@@ -167,6 +173,7 @@ public:
     bool isVirtualNetworkLocked(unsigned netId) const;
     VirtualNetwork* getVirtualNetworkForUserLocked(uid_t uid) const;
     Network* getPhysicalOrUnreachableNetworkForUserLocked(uid_t uid) const;
+    bool isRejectNonSecureUserLocked(uid_t uid) const;
     Permission getPermissionForUserLocked(uid_t uid) const;
     int checkUserNetworkAccessLocked(uid_t uid, unsigned netId) const;
     [[nodiscard]] int createPhysicalNetworkLocked(unsigned netId, Permission permission,
@@ -184,6 +191,11 @@ public:
     // mRWLock guards all accesses to mDefaultNetId, mNetworks, mUsers, mProtectableUsers,
     // mIfindexToLastNetId and mAddressToIfindices.
     mutable std::shared_mutex mRWLock;
+
+    // IchthysOS: the uids that may only use a VPN (networkRejectNonSecureVpn: always-on lockdown,
+    // IchthysOS "Fake location" with a VPN required). A multiset: callers may add the same range.
+    // See getNetworkForDnsLocked. Guarded by mRWLock.
+    UidRanges mRejectNonSecureUsers;
     unsigned mDefaultNetId;
     std::map<unsigned, Network*> mNetworks;  // Map keys are NetIds.
     std::map<uid_t, Permission> mUsers;
